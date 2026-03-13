@@ -13,6 +13,15 @@ A high-performance FastAPI wrapper for downloading, resharding, and re-uploading
 - **Supported Architectures**: Built-in, tested support for `Qwen3.5`, `Qwen3-VL`, `Qwen2.5-VL`, and `Qwen2-VL` architectures. The architecture is easily extensible via the application's configuration.
 - **Dependency Isolation**: Fully compatible with the `uv` package manager for rapid and deterministic environment reproduction.
 
+## Supported Architectures
+
+The API currently supports the following Hugging Face model architectures (extensible in `src/app.py`):
+
+- `Qwen3_5ForConditionalGeneration` (Qwen 3.5)
+- `Qwen3VLForConditionalGeneration` (Qwen 3 VL)
+- `Qwen2_5_VLForConditionalGeneration` (Qwen 2.5 VL)
+- `Qwen2VLForConditionalGeneration` (Qwen 2 VL)
+
 ## Prerequisites
 
 - **Python**: Version 3.10 or higher.
