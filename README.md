@@ -29,8 +29,8 @@ The application currently supports the following Hugging Face model architecture
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/PRITHIVSAKTHIUR/ModelResharder-Transformers-Gradio.git
-   cd ModelResharder-Transformers-Gradio
+   git clone https://github.com/PRITHIVSAKTHIUR/ModelResharder-Transformers.git
+   cd ModelResharder-Transformers
    ```
 
 2. **Install dependencies**:
