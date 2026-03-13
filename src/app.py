@@ -299,5 +299,3 @@ Uses upload_large_folder() for reliable large uploads.
 
 if __name__ == "__main__":
     demo.launch(theme=orange_red_theme, mcp_server=True, ssr_mode=False, show_error=True)
-
-
