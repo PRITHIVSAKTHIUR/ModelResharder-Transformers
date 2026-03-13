@@ -1,6 +1,4 @@
 import torch
-import spaces
-
 import importlib
 from transformers import AutoProcessor
 from huggingface_hub import create_repo, upload_large_folder, login
@@ -113,7 +111,6 @@ def get_model_class(architecture: str):
         raise ImportError(f"Cannot find {info['class_name']} in {info['module']}.")
     return cls
 
-@spaces.GPU(duration=290)
 def load_and_reupload_model(model_name, new_repo_id, hf_token, max_shard_size, selected_arch_label):
 
     log_output = []
@@ -302,4 +299,5 @@ Uses upload_large_folder() for reliable large uploads.
 
 if __name__ == "__main__":
     demo.launch(theme=orange_red_theme, mcp_server=True, ssr_mode=False, show_error=True)
+
 
