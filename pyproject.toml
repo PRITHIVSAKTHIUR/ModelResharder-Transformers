@@ -12,5 +12,6 @@ dependencies = [
     "torch>=2.4.0",
     "accelerate>=0.33.0",
     "hypercorn==0.18.0",
-    "streamlit>=1.55.0",
+    "gradio>=6.9.0",
+    "spaces>=0.47.0",
 ]
