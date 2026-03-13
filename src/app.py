@@ -10,10 +10,9 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from enum import Enum
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from quart import Quart, request, jsonify, Response
+from quart_cors import cors
+from pydantic import BaseModel, Field, ValidationError
 
 from transformers import AutoProcessor
 from huggingface_hub import create_repo, upload_large_folder, login
@@ -263,27 +262,16 @@ def _run_reshard(job: Job):
             pass
 
 
-app = FastAPI(
-    title="ModelResharder-Transformers-FastAPI",
-    description="Reshard and re-upload HuggingFace Transformer models with configurable shard sizes.",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Quart(__name__)
+app = cors(app, allow_origin="*")
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.route("/", methods=["GET"])
 async def ui():
-    return HTMLResponse(content=HTML_PAGE, status_code=200)
+    return HTML_PAGE
 
 
-@app.get("/api/health")
+@app.route("/api/health", methods=["GET"])
 async def health():
     gpu_name = None
     gpu_mem_gb = None
@@ -292,17 +280,17 @@ async def health():
         gpu_mem_gb = round(
             torch.cuda.get_device_properties(0).total_mem / (1024 ** 3), 2
         )
-    return {
+    return jsonify({
         "status": "ok",
-        "app": "ModelResharder-Transformers-FastAPI",
+        "app": "ModelResharder-Transformers-Quart",
         "gpu_available": torch.cuda.is_available(),
         "gpu_name": gpu_name,
         "gpu_memory_gb": gpu_mem_gb,
         "supported_architectures": list(SUPPORTED_ARCHITECTURES.keys()),
-    }
+    })
 
 
-@app.get("/api/architectures")
+@app.route("/api/architectures", methods=["GET"])
 async def architectures():
     result = []
     for key, info in SUPPORTED_ARCHITECTURES.items():
@@ -316,23 +304,27 @@ async def architectures():
             "label": info["label"],
             "importable": importable,
         })
-    return {"architectures": result}
+    return jsonify({"architectures": result})
 
 
-@app.post("/api/reshard", response_model=ReshardResponse, status_code=202)
-async def reshard(req: ReshardRequest, bg: BackgroundTasks):
+@app.route("/api/reshard", methods=["POST"])
+async def reshard():
+    data = await request.get_json()
+    try:
+        req = ReshardRequest(**(data or {}))
+    except ValidationError as e:
+        return jsonify({"detail": e.errors()}), 422
+
     if not req.source_model.strip():
-        raise HTTPException(400, "source_model is required")
+        return jsonify({"detail": "source_model is required"}), 400
     if not req.target_repo.strip():
-        raise HTTPException(400, "target_repo is required")
+        return jsonify({"detail": "target_repo is required"}), 400
     if not req.hf_token.strip():
-        raise HTTPException(400, "hf_token is required")
+        return jsonify({"detail": "hf_token is required"}), 400
     if req.architecture not in SUPPORTED_ARCHITECTURES:
-        raise HTTPException(
-            400,
-            f"Unknown architecture '{req.architecture}'. "
-            f"Supported: {list(SUPPORTED_ARCHITECTURES.keys())}",
-        )
+        return jsonify({
+            "detail": f"Unknown architecture '{req.architecture}'. Supported: {list(SUPPORTED_ARCHITECTURES.keys())}"
+        }), 400
 
     job_id = uuid.uuid4().hex[:10]
     safe_params = req.model_dump()
@@ -348,28 +340,31 @@ async def reshard(req: ReshardRequest, bg: BackgroundTasks):
     job.log(f"   Architecture  : {req.architecture}")
     job.log(f"   Shard size    : {req.shard_size}")
 
-    bg.add_task(_run_reshard, job)
+    app.add_background_task(_run_reshard, job)
 
-    return ReshardResponse(
+    response_data = ReshardResponse(
         job_id=job_id,
         status=JobStatus.QUEUED.value,
         message=f"Job {job_id} queued. Stream logs at GET /api/stream/{job_id}",
     )
+    return jsonify(response_data.model_dump()), 202
 
 
-@app.get("/api/status/{job_id}", response_model=JobStatusResponse)
+@app.route("/api/status/<job_id>", methods=["GET"])
 async def status(job_id: str):
     job = _get_job(job_id)
     if job is None:
-        raise HTTPException(404, f"Job '{job_id}' not found")
-    return JobStatusResponse(**job.public_dict())
+        return jsonify({"detail": f"Job '{job_id}' not found"}), 404
+    
+    response_data = JobStatusResponse(**job.public_dict())
+    return jsonify(response_data.model_dump())
 
 
-@app.get("/api/stream/{job_id}")
+@app.route("/api/stream/<job_id>", methods=["GET"])
 async def stream(job_id: str):
     job = _get_job(job_id)
     if job is None:
-        raise HTTPException(404, f"Job '{job_id}' not found")
+        return jsonify({"detail": f"Job '{job_id}' not found"}), 404
 
     async def _generate():
         sent = 0
@@ -398,31 +393,31 @@ async def stream(job_id: str):
 
             await asyncio.sleep(0.8)
 
-    return StreamingResponse(
+    return Response(
         _generate(),
-        media_type="text/event-stream",
+        mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@app.get("/api/jobs")
+@app.route("/api/jobs", methods=["GET"])
 async def list_jobs():
     with _jobs_lock:
         items = list(_jobs.values())
     items.sort(key=lambda j: j.created_at, reverse=True)
-    return {"jobs": [j.public_dict() for j in items]}
+    return jsonify({"jobs": [j.public_dict() for j in items]})
 
 
-@app.delete("/api/jobs/{job_id}")
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
 async def delete_job(job_id: str):
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is None:
-            raise HTTPException(404, "Job not found")
+            return jsonify({"detail": "Job not found"}), 404
         if job.status == JobStatus.RUNNING:
-            raise HTTPException(409, "Cannot delete a running job")
+            return jsonify({"detail": "Cannot delete a running job"}), 409
         del _jobs[job_id]
-    return {"deleted": job_id}
+    return jsonify({"deleted": job_id})
 
 
 HTML_PAGE = r"""
@@ -431,7 +426,7 @@ HTML_PAGE = r"""
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ModelResharder - Transformers FastAPI</title>
+<title>ModelResharder - Transformers Quart</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -574,7 +569,7 @@ HTML_PAGE = r"""
 </head>
 <body>
 <header>
-  <h1>ModelResharder - Transformers FastAPI</h1>
+  <h1>ModelResharder - Transformers Quart</h1>
   <p>Download - Reshard - Upload HuggingFace models with custom shard sizes</p>
   <span id="gpu-badge"></span>
 </header>
@@ -732,22 +727,16 @@ def main():
 
     port = int(os.environ.get("PORT", 8000))
     host = os.environ.get("HOST", "0.0.0.0")
+    display_host = "127.0.0.1" if host == "0.0.0.0" else host
 
     print(f"")
-    print(f"  ModelResharder-Transformers-FastAPI")
-    print(f"  -----------------------------------")
-    
-    import nest_asyncio
-    from pyngrok import ngrok
+    print(f"  ModelResharder-Transformers-Quart")
+    print(f"  ---------------------------------")
+    print(f"  Server starting on http://{display_host}:{port}")
+    print(f"")
+
     import uvicorn
-
-    ngrok_tunnel = ngrok.connect(port)
-    print(f"  Public URL (ngrok): {ngrok_tunnel.public_url}")
-    print(f"  API docs at:        {ngrok_tunnel.public_url}/docs")
-    print(f"")
-
-    nest_asyncio.apply()
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run("src.app:app", host=host, port=port)
 
 
 if __name__ == "__main__":
